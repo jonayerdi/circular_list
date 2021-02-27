@@ -1,0 +1,456 @@
+use std::{iter::FromIterator, marker::PhantomPinned, mem, ops::{Deref,DerefMut}, ptr::{self, NonNull}};
+
+#[derive(Debug)]
+struct Node<T> {
+    next: NonNull<Node<T>>,
+    prev: NonNull<Node<T>>,
+    data: T,
+    _pin: PhantomPinned,
+}
+
+impl<T> Node<T> {
+    /// Creates a new `Node` containing `data` and returns a pointer to it.
+    ///
+    /// # Safety
+    ///
+    /// The `prev` and `next` pointers may or may not be dangling.
+    unsafe fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
+        // SAFETY: If Box::new did not panic, the allocation succeeded and node is a valid and non-null pointer
+        NonNull::new_unchecked(Box::into_raw(Box::new(Node {
+            data,
+            prev,
+            next,
+            _pin: PhantomPinned,
+        })))
+    }
+    /// Creates a new `Node` containing `data` and returns a pointer to it.
+    ///
+    /// The new `Node` has its `next` and `prev` members pointing to itself.
+    fn new_circular(data: T) -> NonNull<Node<T>> {
+        unsafe {
+            // SAFETY: This is safe because we fix the dangling pointers.
+            let mut node = Node::new(data, NonNull::dangling(), NonNull::dangling());
+            node.as_mut().next = node;
+            node.as_mut().prev = node;
+            node
+        }
+    }
+    /// Creates a chain of `Node`s with the elements from `iter`, and returns pointers to the first and last `Node`s.
+    ///
+    /// Returns `None` iif `iter` is empty.
+    ///
+    /// # Safety
+    ///
+    /// The `first.prev` and `last.next` pointers are left dangling.
+    unsafe fn create_chain_dangling(
+        mut iter: impl Iterator<Item = T>,
+    ) -> Option<(NonNull<Node<T>>, NonNull<Node<T>>, usize)> {
+        let first = Node::new(iter.next()?, NonNull::dangling(), NonNull::dangling());
+        let mut current = first;
+        let mut count = 1;
+        for item in iter {
+            let new_node = Node::new(item, current, NonNull::dangling());
+            current.as_mut().next = new_node;
+            current = new_node;
+            count += 1;
+        }
+        Some((first, current, count))
+    }
+    /// Creates a circular chain of `Node`s with the elements from `iter`, and returns a pointer to the first `Node`.
+    ///
+    /// Returns `None` iif `iter` is empty.
+    fn create_chain_circular(iter: impl Iterator<Item = T>) -> Option<(NonNull<Node<T>>, usize)> {
+        unsafe {
+            // SAFETY: This is safe because we fix the dangling pointers from the first and last nodes.
+            let (mut first, mut last, count) = Node::create_chain_dangling(iter)?;
+            first.as_mut().prev = last;
+            last.as_mut().next = first;
+            Some((first, count))
+        }
+    }
+    /// Inserts a new node with `data` after the `current` node.
+    ///
+    /// # Safety
+    ///
+    /// `current`, `current.next` and `current.prev` should all be valid pointers
+    unsafe fn insert_after(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
+        let mut next = current.as_ref().next;
+        let node = Node::new(data, current, next);
+        current.as_mut().next = node;
+        next.as_mut().prev = node;
+        node
+    }
+
+    /// Inserts a new node with `data` before the `current` node.
+    ///
+    /// # Safety
+    ///
+    /// `current`, `current.next` and `current.prev` should all be valid pointers
+    unsafe fn insert_before(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
+        let mut prev = current.as_ref().prev;
+        let node = Node::new(data, prev, current);
+        current.as_mut().prev = node;
+        prev.as_mut().next = node;
+        node
+    }
+
+    unsafe fn delete_raw(current: NonNull<Node<T>>) {
+        drop(Box::from_raw(current.as_ptr()));
+    }
+
+    unsafe fn delete(current: NonNull<Node<T>>) -> Option<NonNull<Node<T>>> {
+        let mut prev = current.as_ref().prev;
+        let mut next = current.as_ref().next;
+        Node::delete_raw(current);
+        if current != next {
+            prev.as_mut().next = next;
+            next.as_mut().prev = prev;
+            Some(next)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LinkedList<T> {
+    head: NonNull<Node<T>>,
+    length: usize,
+}
+
+impl<T> LinkedList<T> {
+    pub fn new() -> Self {
+        LinkedList {
+            head: NonNull::dangling(),
+            length: 0,
+        }
+    }
+    pub const fn len(&self) -> usize {
+        self.length
+    }
+    pub const fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+    pub fn first<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
+        unsafe {
+            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            if !self.is_empty() {
+                Some(LinkedListIndex::new(self, self.head))
+            } else {
+                None
+            }
+        }
+    }
+    pub fn first_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
+        unsafe {
+            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            if !self.is_empty() {
+                Some(LinkedListIndexMut::new(self, self.head))
+            } else {
+                None
+            }
+        }
+    }
+    pub fn last<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
+        unsafe {
+            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            if !self.is_empty() {
+                Some(LinkedListIndex::new(self, self.head.as_ref().prev))
+            } else {
+                None
+            }
+        }
+    }
+    pub fn last_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
+        unsafe {
+            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            if !self.is_empty() {
+                Some(LinkedListIndexMut::new(self, self.head.as_ref().prev))
+            } else {
+                None
+            }
+        }
+    }
+    pub fn push(&mut self, data: T) {
+        if let Some(mut index) = self.last_mut() {
+            index.insert_after(data);
+        } else {
+            self.head = Node::new_circular(data);
+            self.length = 1;
+        }
+    }
+    pub fn extend(&mut self, iter: impl Iterator<Item = T>) {
+        if let Some(mut index) = self.last_mut() {
+            index.extend_after(iter);
+        } else if let Some((head, length)) = Node::create_chain_circular(iter) {
+            self.head = head;
+            self.length = length;
+        }
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        Some(self.last_mut()?.delete().0)
+    }
+}
+
+impl<T> Drop for LinkedList<T> {
+    fn drop(&mut self) {
+        // Free all the `Node`s
+        unsafe {
+            let mut current = self.head;
+            for _ in 0..self.len() {
+                let next = current.as_ref().next;
+                Node::delete_raw(current);
+                current = next;
+            }
+        }
+    }
+}
+
+impl<T> FromIterator<T> for LinkedList<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        if let Some((head, length)) = Node::create_chain_circular(iter) {
+            LinkedList { head, length }
+        } else {
+            LinkedList::new()
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LinkedListIndex<'a, T> {
+    list: &'a LinkedList<T>,
+    node: NonNull<Node<T>>,
+}
+
+/// Reference to a `Node` from a `LinkedList`.
+///
+/// A `LinkedListIndex` can always be dereferenced safely, so no `LinkedListIndex` may exist for an empty `LinkedList`.
+impl<'a, T> LinkedListIndex<'a, T> {
+    /// Creates a new `LinkedListIndex`.
+    ///
+    /// # Safety
+    ///
+    /// `node` must be a Node from `list`.
+    unsafe fn new(list: &'a LinkedList<T>, node: NonNull<Node<T>>) -> Self {
+        Self { list, node }
+    }
+    pub fn traverse(&mut self, count: isize) {
+        unsafe {
+            if count < 0 {
+                for _ in 0..(-count as usize) {
+                    self.node = self.node.as_ref().prev;
+                }
+            } else {
+                for _ in 0..(count as usize) {
+                    self.node = self.node.as_ref().next;
+                }
+            }
+        }
+    }
+    pub fn data(&self) -> &T {
+        unsafe {
+            &self.node.as_ref().data
+        }
+    }
+}
+
+impl<'a, T> Deref for LinkedListIndex<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &'a Self::Target {
+        unsafe { mem::transmute(self.data()) }
+    }
+}
+
+impl<'a, T> PartialEq for LinkedListIndex<'a, T> {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.node.as_ptr(), other.node.as_ptr())
+    }
+}
+
+impl<'a, T> Eq for LinkedListIndex<'a, T> {}
+
+impl<'a, T> From<LinkedListIndexMut<'a, T>> for LinkedListIndex<'a, T> {
+    fn from(source: LinkedListIndexMut<'a, T>) -> Self {
+        unsafe {
+            // SAFETY: This is safe because `list` and `node` come from a `LinkedListIndexMut` instance and must be valid
+            Self::new(source.list, source.node)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LinkedListIndexMut<'a, T> {
+    list: &'a mut LinkedList<T>,
+    node: NonNull<Node<T>>,
+}
+
+/// Mutable reference to a `Node` from a `LinkedList`.
+///
+/// Like `LinkedListIndex`, it can always be dereferenced safely, so no `LinkedListIndexMut` may exist for an empty `LinkedList`.
+impl<'a, T> LinkedListIndexMut<'a, T> {
+    /// Creates a new `LinkedListIndexMut`.
+    ///
+    /// # Safety
+    ///
+    /// `node` must be a Node from `list`.
+    unsafe fn new(list: &'a mut LinkedList<T>, node: NonNull<Node<T>>) -> Self {
+        Self { list, node }
+    }
+    pub fn traverse(&mut self, count: isize) {
+        unsafe {
+            if count < 0 {
+                for _ in 0..(-count as usize) {
+                    self.node = self.node.as_ref().prev;
+                }
+            } else {
+                for _ in 0..(count as usize) {
+                    self.node = self.node.as_ref().next;
+                }
+            }
+        }
+    }
+    pub fn data(&self) -> &T {
+        unsafe {
+            &self.node.as_ref().data
+        }
+    }
+    pub fn data_mut(&mut self) -> &mut T {
+        unsafe {
+            &mut self.node.as_mut().data
+        }
+    }
+    pub fn set_as_head(&mut self) {
+        self.list.head = self.node;
+    }
+    pub fn insert_after(&mut self, data: T) {
+        unsafe {
+            self.node = Node::insert_after(self.node, data);
+            self.list.length += 1;
+        }
+    }
+    pub fn insert_before(&mut self, data: T) {
+        unsafe {
+            self.node = Node::insert_before(self.node, data);
+            self.list.length += 1;
+        }
+    }
+    pub fn extend_after(&mut self, iter: impl Iterator<Item = T>) {
+        unsafe {
+            if let Some((first, last, count)) = Node::create_chain_dangling(iter) {
+                let mut next = self.node.as_ref().next;
+                self.node.as_mut().next = first;
+                next.as_mut().prev = last;
+                self.node = last;
+                self.list.length += count;
+            }
+        }
+    }
+    pub fn delete(self) -> (T, Option<Self>) {
+        todo!()
+        /*
+        unsafe {
+            self.list.length -= 1;
+            let node = self.node;
+            match Node::delete(node) {
+                Some(next) => {
+                    if node == self.list.head {
+                        self.list.head = next;
+                    }
+                    Some(self)
+                }
+                None => None,
+            }
+        }
+        */
+    }
+}
+
+impl<'a, T> Deref for LinkedListIndexMut<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &'a Self::Target {
+        unsafe { mem::transmute(self.data()) }
+    }
+}
+
+impl<'a, T> DerefMut for LinkedListIndexMut<'a, T> {
+    fn deref_mut(&mut self) -> &'a mut Self::Target {
+        unsafe { mem::transmute(self.data_mut()) }
+    }
+}
+
+impl<'a, T> PartialEq for LinkedListIndexMut<'a, T> {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::eq(self.node.as_ptr(), other.node.as_ptr())
+    }
+}
+
+impl<'a, T> Eq for LinkedListIndexMut<'a, T> {}
+
+impl<'a, T> Iterator for LinkedListIndex<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            let item = mem::transmute(&self.node.as_ref().data);
+            self.traverse(1);
+            Some(item)
+        }
+    }
+}
+
+impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            let item = mem::transmute(&mut self.node.as_mut().data);
+            self.traverse(1);
+            Some(item)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn empty() {
+        let ll: LinkedList<()> = LinkedList::new();
+        assert!(ll.is_empty());
+        assert!(ll.first().is_none());
+        assert!(ll.last().is_none());
+    }
+    #[test]
+    fn push() {
+        let data = [1, 2, 3, 4];
+        let mut ll = LinkedList::new();
+        for x in data.iter() {
+            ll.push(*x);
+        }
+        assert_eq!(ll.len(), data.len());
+        let idx = ll.first().unwrap();
+        for (expected, actual) in data.iter().zip(idx) {
+            assert_eq!(expected, actual);
+        }
+    }
+    #[test]
+    fn index_mut() {
+        let data = [1, 2, 3, 4];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut idx = ll.first_mut().unwrap();
+        idx.next().unwrap();
+        idx.insert_after(5);
+        idx.insert_after(7);
+        idx.insert_before(8);
+        *idx = 6;
+        assert_eq!(ll.len(), 7);
+        let expected: Vec<_> = [1, 2, 5, 6, 7, 3, 4].iter().collect();
+        let actual: Vec<_> = ll.first().unwrap().take(ll.len()).collect();
+        assert_eq!(expected, actual);
+    }
+    #[test]
+    fn pop() {
+        //todo!()
+    }
+}
