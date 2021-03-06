@@ -1,4 +1,11 @@
-use std::{iter::FromIterator, marker::PhantomPinned, mem, ops::{Deref,DerefMut}, ptr::{self, NonNull}};
+use std::{
+    alloc::{alloc, dealloc, Layout},
+    iter::FromIterator,
+    marker::PhantomPinned,
+    mem,
+    ops::{Deref, DerefMut},
+    ptr::{self, NonNull},
+};
 
 #[derive(Debug)]
 struct Node<T> {
@@ -15,13 +22,15 @@ impl<T> Node<T> {
     ///
     /// The `prev` and `next` pointers may or may not be dangling.
     unsafe fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
-        // SAFETY: If Box::new did not panic, the allocation succeeded and node is a valid and non-null pointer
-        NonNull::new_unchecked(Box::into_raw(Box::new(Node {
+        // SAFETY: We check for null pointer returned by alloc with NonNull::new().unwrap()
+        let node = NonNull::new(alloc(Layout::new::<Node<T>>()) as *mut Node<T>).unwrap();
+        *node.as_ptr() = Node {
             data,
             prev,
             next,
             _pin: PhantomPinned,
-        })))
+        };
+        node
     }
     /// Creates a new `Node` containing `data` and returns a pointer to it.
     ///
@@ -94,21 +103,25 @@ impl<T> Node<T> {
         node
     }
 
-    unsafe fn delete_raw(current: NonNull<Node<T>>) {
-        drop(Box::from_raw(current.as_ptr()));
+    unsafe fn delete_raw(current: NonNull<Node<T>>) -> T {
+        let data = ptr::read(current.as_ptr()).data;
+        dealloc(current.as_ptr() as *mut u8, Layout::new::<Node<T>>());
+        data
     }
 
-    unsafe fn delete(current: NonNull<Node<T>>) -> Option<NonNull<Node<T>>> {
+    unsafe fn delete(current: NonNull<Node<T>>) -> (T, Option<NonNull<Node<T>>>) {
         let mut prev = current.as_ref().prev;
         let mut next = current.as_ref().next;
-        Node::delete_raw(current);
-        if current != next {
-            prev.as_mut().next = next;
-            next.as_mut().prev = prev;
-            Some(next)
-        } else {
-            None
-        }
+        (
+            Node::delete_raw(current),
+            if current != next {
+                prev.as_mut().next = next;
+                next.as_mut().prev = prev;
+                Some(next)
+            } else {
+                None
+            },
+        )
     }
 }
 
@@ -188,7 +201,7 @@ impl<T> LinkedList<T> {
         }
     }
     pub fn pop(&mut self) -> Option<T> {
-        Some(self.last_mut()?.delete().0)
+        Some(self.last_mut()?.remove().0)
     }
 }
 
@@ -199,7 +212,7 @@ impl<T> Drop for LinkedList<T> {
             let mut current = self.head;
             for _ in 0..self.len() {
                 let next = current.as_ref().next;
-                Node::delete_raw(current);
+                drop(Node::delete_raw(current));
                 current = next;
             }
         }
@@ -214,6 +227,26 @@ impl<T> FromIterator<T> for LinkedList<T> {
         } else {
             LinkedList::new()
         }
+    }
+}
+
+pub struct LinkedListIterator<T>(LinkedList<T>);
+
+impl<T> Iterator for LinkedListIterator<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.0.first_mut()?.remove().0)
+    }
+}
+
+impl<T> IntoIterator for LinkedList<T> {
+    type Item = T;
+
+    type IntoIter = LinkedListIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        LinkedListIterator(self)
     }
 }
 
@@ -249,9 +282,7 @@ impl<'a, T> LinkedListIndex<'a, T> {
         }
     }
     pub fn data(&self) -> &T {
-        unsafe {
-            &self.node.as_ref().data
-        }
+        unsafe { &self.node.as_ref().data }
     }
 }
 
@@ -311,14 +342,10 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
         }
     }
     pub fn data(&self) -> &T {
-        unsafe {
-            &self.node.as_ref().data
-        }
+        unsafe { &self.node.as_ref().data }
     }
     pub fn data_mut(&mut self) -> &mut T {
-        unsafe {
-            &mut self.node.as_mut().data
-        }
+        unsafe { &mut self.node.as_mut().data }
     }
     pub fn set_as_head(&mut self) {
         self.list.head = self.node;
@@ -346,23 +373,24 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
             }
         }
     }
-    pub fn delete(self) -> (T, Option<Self>) {
-        todo!()
-        /*
+    pub fn remove(mut self) -> (T, Option<Self>) {
         unsafe {
             self.list.length -= 1;
-            let node = self.node;
-            match Node::delete(node) {
-                Some(next) => {
-                    if node == self.list.head {
-                        self.list.head = next;
+            let (data, next) = Node::delete(self.node);
+            (
+                data,
+                match next {
+                    Some(next) => {
+                        if self.node == self.list.head {
+                            self.list.head = next;
+                        }
+                        self.node = next;
+                        Some(self)
                     }
-                    Some(self)
-                }
-                None => None,
-            }
+                    None => None,
+                },
+            )
         }
-        */
     }
 }
 
@@ -449,8 +477,38 @@ mod tests {
         let actual: Vec<_> = ll.first().unwrap().take(ll.len()).collect();
         assert_eq!(expected, actual);
     }
+
+    #[test]
+    fn remove() {
+        let data = [1, 2, 3, 4];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut idx = ll.last_mut().unwrap();
+        idx.traverse(-1);
+        let (value, idx) = idx.remove();
+        assert_eq!(3, value);
+        assert_eq!(4, *idx.unwrap());
+        let (value, idx) = ll.first_mut().unwrap().remove();
+        assert_eq!(1, value);
+        assert_eq!(2, *idx.unwrap());
+        assert_eq!(vec![2, 4], ll.into_iter().collect::<Vec<_>>());
+    }
     #[test]
     fn pop() {
-        //todo!()
+        let data = [1, 2, 4];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut idx = ll.first_mut().unwrap();
+        idx.traverse(2);
+        idx.insert_before(3);
+        assert_eq!(Some(4), ll.pop());
+        assert_eq!(Some(3), ll.pop());
+        assert_eq!(Some(2), ll.pop());
+        assert_eq!(Some(1), ll.pop());
+        assert_eq!(None, ll.pop());
+        ll.push(6);
+        ll.push(7);
+        assert_eq!(Some(7), ll.pop());
+        ll.push(8);
+        assert_eq!(Some(8), ll.pop());
+        assert_eq!(Some(6), ll.pop());
     }
 }
