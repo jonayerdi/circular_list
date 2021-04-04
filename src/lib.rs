@@ -9,7 +9,7 @@ use std::{
 
 /// A node of a `LinkedList`.
 ///
-/// Containins the data and the pointers to the next and previous nodes.
+/// Contains the data and the pointers to the next and previous nodes.
 ///
 /// This is an internal unsafe type, `next` and `prev` may be left dangling in some cases.
 #[derive(Debug)]
@@ -78,8 +78,6 @@ impl<T> Node<T> {
     ///
     /// Returns a pointer to the first `Node`, as well as the count of `Node`s in the chain.
     /// Iff `iter` is empty, this function returns `None`.
-    ///
-    /// Returns `None` iff `iter` is empty.
     fn create_chain_circular(iter: impl Iterator<Item = T>) -> Option<(NonNull<Node<T>>, usize)> {
         unsafe {
             // SAFETY: This is safe because we fix the dangling pointers from the first and last nodes.
@@ -154,6 +152,9 @@ impl<T> Node<T> {
     }
 }
 
+/// A circular linked list.
+///
+/// Every node in the list contains references to the previous and next nodes.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: NonNull<Node<T>>,
@@ -161,18 +162,22 @@ pub struct LinkedList<T> {
 }
 
 impl<T> LinkedList<T> {
+    /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
         LinkedList {
             head: NonNull::dangling(),
             length: 0,
         }
     }
+    /// Returns the number of elements in the list.
     pub const fn len(&self) -> usize {
         self.length
     }
+    /// Returns `true` if the list contains no elements.
     pub const fn is_empty(&self) -> bool {
         self.length == 0
     }
+    /// Returns a `LinkedListIndex` to the first node of the list (`head`), or `None` if the list is empty.
     pub fn first<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
         unsafe {
             // SAFETY: self.head can only be dangling if the LinkedList is empty
@@ -183,6 +188,7 @@ impl<T> LinkedList<T> {
             }
         }
     }
+    /// Returns a `LinkedListIndexMut` to the first node of the list (`head`), or `None` if the list is empty.
     pub fn first_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
         unsafe {
             // SAFETY: self.head can only be dangling if the LinkedList is empty
@@ -193,6 +199,7 @@ impl<T> LinkedList<T> {
             }
         }
     }
+    /// Returns a `LinkedListIndex` to the last node of the list (`head.prev`), or `None` if the list is empty.
     pub fn last<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
         unsafe {
             // SAFETY: self.head can only be dangling if the LinkedList is empty
@@ -203,6 +210,7 @@ impl<T> LinkedList<T> {
             }
         }
     }
+    /// Returns a `LinkedListIndexMut` to the last node of the list (`head.prev`), or `None` if the list is empty.
     pub fn last_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
         unsafe {
             // SAFETY: self.head can only be dangling if the LinkedList is empty
@@ -213,6 +221,7 @@ impl<T> LinkedList<T> {
             }
         }
     }
+    /// Appends a new node with `data` to the end of the list.
     pub fn push(&mut self, data: T) {
         if let Some(mut index) = self.last_mut() {
             index.insert_after(data);
@@ -221,6 +230,7 @@ impl<T> LinkedList<T> {
             self.length = 1;
         }
     }
+    /// Appends all the elements from `iter` to the end of the list.
     pub fn extend(&mut self, iter: impl Iterator<Item = T>) {
         if let Some(mut index) = self.last_mut() {
             index.extend_after(iter);
@@ -229,6 +239,7 @@ impl<T> LinkedList<T> {
             self.length = length;
         }
     }
+    /// Removes the last element from the list and returns it, or `None` if it is empty.
     pub fn pop(&mut self) -> Option<T> {
         Some(self.last_mut()?.remove().0)
     }
@@ -238,6 +249,8 @@ impl<T> Drop for LinkedList<T> {
     fn drop(&mut self) {
         // Free all the `Node`s
         unsafe {
+            // SAFETY: This deletes each node exactly once, assuming that the circular
+            // linked list is constructed correctly, and that its length is self.length.
             let mut current = self.head;
             for _ in 0..self.len() {
                 let next = current.as_ref().next;
@@ -259,6 +272,7 @@ impl<T> FromIterator<T> for LinkedList<T> {
     }
 }
 
+/// A `DoubleEndedIterator` which consumes the elements from a `LinkedList`.
 pub struct LinkedListIterator<T>(LinkedList<T>);
 
 impl<T> Iterator for LinkedListIterator<T> {
@@ -285,40 +299,32 @@ impl<T> IntoIterator for LinkedList<T> {
     }
 }
 
+/// Reference to a node from a `LinkedList`.
+///
+/// Can be dereferenced to get the node's underlying data.
+///
+/// This is also a circular iterator which traverses the list indefinitely.
+/// The `iter_list` method can be used to get a finite iterator which traverses the list once.
 #[derive(Clone, Debug)]
 pub struct LinkedListIndex<'a, T> {
     list: &'a LinkedList<T>,
     node: NonNull<Node<T>>,
 }
 
-/// Reference to a `Node` from a `LinkedList`.
-///
-/// A `LinkedListIndex` can always be dereferenced safely, so no `LinkedListIndex` may exist for an empty `LinkedList`.
 impl<'a, T> LinkedListIndex<'a, T> {
     /// Creates a new `LinkedListIndex`.
     ///
     /// # Safety
     ///
-    /// `node` must be a Node from `list`.
+    /// `node` must be a node from `list`.
     unsafe fn new(list: &'a LinkedList<T>, node: NonNull<Node<T>>) -> Self {
         Self { list, node }
     }
-    pub fn traverse(&mut self, count: isize) {
-        unsafe {
-            if count < 0 {
-                for _ in 0..(-count as usize) {
-                    self.node = self.node.as_ref().prev;
-                }
-            } else {
-                for _ in 0..(count as usize) {
-                    self.node = self.node.as_ref().next;
-                }
-            }
-        }
-    }
+    /// Returns an immutable reference to the node's underlying data.
     pub fn data(&self) -> &T {
         unsafe { &self.node.as_ref().data }
     }
+    /// Creates a finite iterator which traverses the list starting from the current node.
     pub fn iter_list(self) -> Take<Self> {
         let len = self.list.len();
         self.take(len)
@@ -343,75 +349,87 @@ impl<'a, T> Eq for LinkedListIndex<'a, T> {}
 impl<'a, T> From<LinkedListIndexMut<'a, T>> for LinkedListIndex<'a, T> {
     fn from(source: LinkedListIndexMut<'a, T>) -> Self {
         unsafe {
-            // SAFETY: This is safe because `list` and `node` come from a `LinkedListIndexMut` instance and must be valid
+            // SAFETY: This is safe because `list` and `node` come 
+            // from a `LinkedListIndexMut` instance and must be valid.
             Self::new(source.list, source.node)
         }
     }
 }
 
+/// Mutable reference to a node from a `LinkedList`.
+///
+/// Can be dereferenced to get or set the node's underlying data.
+///
+/// This is also a circular iterator which traverses the list indefinitely.
+/// The `iter_list` method can be used to get a finite iterator which traverses the list once.
 #[derive(Debug)]
 pub struct LinkedListIndexMut<'a, T> {
     list: &'a mut LinkedList<T>,
     node: NonNull<Node<T>>,
 }
 
-/// Mutable reference to a `Node` from a `LinkedList`.
-///
-/// Like `LinkedListIndex`, it can always be dereferenced safely, so no `LinkedListIndexMut` may exist for an empty `LinkedList`.
 impl<'a, T> LinkedListIndexMut<'a, T> {
     /// Creates a new `LinkedListIndexMut`.
     ///
     /// # Safety
     ///
-    /// `node` must be a Node from `list`.
+    /// `node` must be a node from `list`.
     unsafe fn new(list: &'a mut LinkedList<T>, node: NonNull<Node<T>>) -> Self {
         Self { list, node }
     }
-    pub fn traverse(&mut self, count: isize) {
-        unsafe {
-            if count < 0 {
-                for _ in 0..(-count as usize) {
-                    self.node = self.node.as_ref().prev;
-                }
-            } else {
-                for _ in 0..(count as usize) {
-                    self.node = self.node.as_ref().next;
-                }
-            }
-        }
-    }
+    /// Returns an immutable reference to the node's underlying data.
     pub fn data(&self) -> &T {
         unsafe { &self.node.as_ref().data }
     }
+    /// Returns a mutable reference to the node's underlying data.
     pub fn data_mut(&mut self) -> &mut T {
         unsafe { &mut self.node.as_mut().data }
     }
+    /// Sets the current node as the head of the `LinkedList` it references.
     pub fn set_as_head(&mut self) {
         self.list.head = self.node;
     }
+    /// Inserts a new node containing `data` after the current node.
+    ///
+    /// `self` will point to the inserted node.
     pub fn insert_after(&mut self, data: T) {
         unsafe {
+            // SAFETY: The existing nodes cannot have dangling pointers, and the list's lenght is correctly updated.
             self.node = Node::insert_after(self.node, data);
             self.list.length += 1;
         }
     }
+    /// Inserts a new node containing `data` before the current node.
+    ///
+    /// `self` will point to the inserted node.
     pub fn insert_before(&mut self, data: T) {
         unsafe {
+            // SAFETY: The existing nodes cannot have dangling pointers, and the list's lenght is correctly updated.
             self.node = Node::insert_before(self.node, data);
             self.list.length += 1;
         }
     }
+    /// Inserts new nodes containing the elements from `iter` after the current node.
+    ///
+    /// If `iter` is not empty, `self` will point to the last inserted node.
     pub fn extend_after(&mut self, iter: impl Iterator<Item = T>) {
         unsafe {
-            if let Some((first, last, count)) = Node::create_chain_dangling(iter) {
+            // SAFETY: The existing nodes cannot have dangling pointers, and the list's lenght is correctly updated.
+            // The new chain is connected to the list so that there are no dangling pointers.
+            if let Some((mut first, mut last, count)) = Node::create_chain_dangling(iter) {
                 let mut next = self.node.as_ref().next;
                 self.node.as_mut().next = first;
                 next.as_mut().prev = last;
+                first.as_mut().prev = self.node;
+                last.as_mut().next = next;
                 self.node = last;
                 self.list.length += count;
             }
         }
     }
+    /// Removes the current node.
+    ///
+    /// Returns the data from the removed node and a reference to the next node, or `None` if the last node from the list was removed.
     pub fn remove(mut self) -> (T, Option<Self>) {
         unsafe {
             self.list.length -= 1;
@@ -431,6 +449,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
             )
         }
     }
+    /// Creates a finite iterator which traverses the list starting from the current node.
     pub fn iter_list(self) -> Take<Self> {
         let len = self.list.len();
         self.take(len)
@@ -464,7 +483,7 @@ impl<'a, T> Iterator for LinkedListIndex<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             let item = mem::transmute(&self.node.as_ref().data);
-            self.traverse(1);
+            self.node = self.node.as_ref().next;
             Some(item)
         }
     }
@@ -474,7 +493,7 @@ impl<'a, T> DoubleEndedIterator for LinkedListIndex<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
             let item = mem::transmute(&self.node.as_ref().data);
-            self.traverse(-1);
+            self.node = self.node.as_ref().prev;
             Some(item)
         }
     }
@@ -486,7 +505,7 @@ impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             let item = mem::transmute(&mut self.node.as_mut().data);
-            self.traverse(1);
+            self.node = self.node.as_ref().next;
             Some(item)
         }
     }
@@ -496,7 +515,7 @@ impl<'a, T> DoubleEndedIterator for LinkedListIndexMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
             let item = mem::transmute(&mut self.node.as_mut().data);
-            self.traverse(-1);
+            self.node = self.node.as_ref().prev;
             Some(item)
         }
     }
@@ -558,11 +577,40 @@ mod tests {
         assert_eq!(expected, actual);
     }
     #[test]
+    fn extend_after() {
+        let data = [1, 2, 5, 6];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut idx = ll.first_mut().unwrap();
+        idx.next().unwrap();
+        idx.extend_after([3, 4].iter().map(|x| *x));
+        let expected: Vec<_> = [1, 2, 3, 4, 5, 6].iter().collect();
+        let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
+        assert_eq!(expected, actual);
+    }
+    #[test]
+    fn extend_empty() {
+        let data = [1, 2, 3, 4];
+        let mut ll = LinkedList::new();
+        ll.extend(data.iter().map(|x| *x));
+        let expected: Vec<_> = [1, 2, 3, 4].iter().collect();
+        let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
+        assert_eq!(expected, actual);
+    }
+    #[test]
+    fn extend() {
+        let data = [1, 2, 3, 4];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        ll.extend([5, 6].iter().map(|x| *x));
+        let expected: Vec<_> = [1, 2, 3, 4, 5, 6].iter().collect();
+        let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
+        assert_eq!(expected, actual);
+    }
+    #[test]
     fn remove() {
         let data = [1, 2, 3, 4];
         let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
         let mut idx = ll.last_mut().unwrap();
-        idx.traverse(-1);
+        idx.next_back().unwrap();
         let (value, idx) = idx.remove();
         assert_eq!(3, value);
         assert_eq!(4, *idx.unwrap());
@@ -576,7 +624,7 @@ mod tests {
         let data = [1, 2, 4];
         let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
         let mut idx = ll.first_mut().unwrap();
-        idx.traverse(2);
+        idx.nth(1);
         idx.insert_before(3);
         assert_eq!(Some(4), ll.pop());
         assert_eq!(Some(3), ll.pop());
