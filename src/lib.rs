@@ -1,18 +1,23 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
-    iter::FromIterator,
+    iter::{FromIterator, Take},
     marker::PhantomPinned,
     mem,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
 };
 
+/// A node of a `LinkedList`.
+///
+/// Containins the data and the pointers to the next and previous nodes.
+///
+/// This is an internal unsafe type, `next` and `prev` may be left dangling in some cases.
 #[derive(Debug)]
 struct Node<T> {
     next: NonNull<Node<T>>,
     prev: NonNull<Node<T>>,
     data: T,
-    _pin: PhantomPinned,
+    pin_: PhantomPinned,
 }
 
 impl<T> Node<T> {
@@ -24,12 +29,15 @@ impl<T> Node<T> {
     unsafe fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
         // SAFETY: We check for null pointer returned by alloc with NonNull::new().unwrap()
         let node = NonNull::new(alloc(Layout::new::<Node<T>>()) as *mut Node<T>).unwrap();
-        *node.as_ptr() = Node {
-            data,
-            prev,
-            next,
-            _pin: PhantomPinned,
-        };
+        ptr::write(
+            node.as_ptr(),
+            Node {
+                data,
+                prev,
+                next,
+                pin_: PhantomPinned,
+            },
+        );
         node
     }
     /// Creates a new `Node` containing `data` and returns a pointer to it.
@@ -37,16 +45,17 @@ impl<T> Node<T> {
     /// The new `Node` has its `next` and `prev` members pointing to itself.
     fn new_circular(data: T) -> NonNull<Node<T>> {
         unsafe {
-            // SAFETY: This is safe because we fix the dangling pointers.
+            // SAFETY: This is safe because `prev` and `next` are pointing to a valid `Node`.
             let mut node = Node::new(data, NonNull::dangling(), NonNull::dangling());
             node.as_mut().next = node;
             node.as_mut().prev = node;
             node
         }
     }
-    /// Creates a chain of `Node`s with the elements from `iter`, and returns pointers to the first and last `Node`s.
+    /// Creates a chain of `Node`s with the elements from `iter`.
     ///
-    /// Returns `None` iif `iter` is empty.
+    /// Returns a tuple with the pointers to the first and last `Node`s, as well as the count of `Node`s in the chain.
+    /// Iff `iter` is empty, this function returns `None`.
     ///
     /// # Safety
     ///
@@ -65,9 +74,12 @@ impl<T> Node<T> {
         }
         Some((first, current, count))
     }
-    /// Creates a circular chain of `Node`s with the elements from `iter`, and returns a pointer to the first `Node`.
+    /// Creates a circular chain of `Node`s with the elements from `iter`.
     ///
-    /// Returns `None` iif `iter` is empty.
+    /// Returns a pointer to the first `Node`, as well as the count of `Node`s in the chain.
+    /// Iff `iter` is empty, this function returns `None`.
+    ///
+    /// Returns `None` iff `iter` is empty.
     fn create_chain_circular(iter: impl Iterator<Item = T>) -> Option<(NonNull<Node<T>>, usize)> {
         unsafe {
             // SAFETY: This is safe because we fix the dangling pointers from the first and last nodes.
@@ -81,7 +93,7 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current`, `current.next` and `current.prev` should all be valid pointers
+    /// `current` and `current.next` should not be dangling.
     unsafe fn insert_after(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
         let mut next = current.as_ref().next;
         let node = Node::new(data, current, next);
@@ -94,7 +106,7 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current`, `current.next` and `current.prev` should all be valid pointers
+    /// `current` and `current.prev` should not be dangling.
     unsafe fn insert_before(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
         let mut prev = current.as_ref().prev;
         let node = Node::new(data, prev, current);
@@ -103,12 +115,29 @@ impl<T> Node<T> {
         node
     }
 
+    /// Deallocates `current`.
+    ///
+    /// Returns the `data` from `current`.
+    ///
+    /// # Safety
+    ///
+    /// `current` should not be dangling.
+    /// References to `current` will no longer be valid.
     unsafe fn delete_raw(current: NonNull<Node<T>>) -> T {
         let data = ptr::read(current.as_ptr()).data;
         dealloc(current.as_ptr() as *mut u8, Layout::new::<Node<T>>());
         data
     }
 
+    /// Deallocates `current`, and fixes the references from `current.prev` and `current.next`.
+    ///
+    /// Returns the `data` from `current`, as well as the pointer to the next `Node`.
+    /// Iff `current.next == current`, returns `None` instead of the pointer to the next `Node`.
+    ///
+    /// # Safety
+    ///
+    /// `current`, `current.prev` and `current.next` should not be dangling.
+    /// Other references to `current` will no longer be valid.
     unsafe fn delete(current: NonNull<Node<T>>) -> (T, Option<NonNull<Node<T>>>) {
         let mut prev = current.as_ref().prev;
         let mut next = current.as_ref().next;
@@ -240,6 +269,12 @@ impl<T> Iterator for LinkedListIterator<T> {
     }
 }
 
+impl<T> DoubleEndedIterator for LinkedListIterator<T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some(self.0.last_mut()?.remove().0)
+    }
+}
+
 impl<T> IntoIterator for LinkedList<T> {
     type Item = T;
 
@@ -283,6 +318,10 @@ impl<'a, T> LinkedListIndex<'a, T> {
     }
     pub fn data(&self) -> &T {
         unsafe { &self.node.as_ref().data }
+    }
+    pub fn iter_list(self) -> Take<Self> {
+        let len = self.list.len();
+        self.take(len)
     }
 }
 
@@ -392,6 +431,10 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
             )
         }
     }
+    pub fn iter_list(self) -> Take<Self> {
+        let len = self.list.len();
+        self.take(len)
+    }
 }
 
 impl<'a, T> Deref for LinkedListIndexMut<'a, T> {
@@ -427,6 +470,16 @@ impl<'a, T> Iterator for LinkedListIndex<'a, T> {
     }
 }
 
+impl<'a, T> DoubleEndedIterator for LinkedListIndex<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        unsafe {
+            let item = mem::transmute(&self.node.as_ref().data);
+            self.traverse(-1);
+            Some(item)
+        }
+    }
+}
+
 impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
     type Item = &'a mut T;
 
@@ -439,9 +492,20 @@ impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
     }
 }
 
+impl<'a, T> DoubleEndedIterator for LinkedListIndexMut<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        unsafe {
+            let item = mem::transmute(&mut self.node.as_mut().data);
+            self.traverse(-1);
+            Some(item)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::array::IntoIter;
     #[test]
     fn empty() {
         let ll: LinkedList<()> = LinkedList::new();
@@ -463,6 +527,22 @@ mod tests {
         }
     }
     #[test]
+    fn index() {
+        let data = [1, 2, 3, 4, 5, 6];
+        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        assert_eq!(ll.len(), 6);
+        let mut idx = ll.last().unwrap();
+        assert_eq!(6, *idx);
+        idx.next().unwrap();
+        assert_eq!(1, *idx);
+        idx.next_back().unwrap();
+        assert_eq!(6, *idx);
+        idx.next_back().unwrap();
+        assert_eq!(5, *idx);
+        idx.next_back().unwrap();
+        assert_eq!(4, *idx);
+    }
+    #[test]
     fn index_mut() {
         let data = [1, 2, 3, 4];
         let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
@@ -474,10 +554,9 @@ mod tests {
         *idx = 6;
         assert_eq!(ll.len(), 7);
         let expected: Vec<_> = [1, 2, 5, 6, 7, 3, 4].iter().collect();
-        let actual: Vec<_> = ll.first().unwrap().take(ll.len()).collect();
+        let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
         assert_eq!(expected, actual);
     }
-
     #[test]
     fn remove() {
         let data = [1, 2, 3, 4];
@@ -510,5 +589,44 @@ mod tests {
         ll.push(8);
         assert_eq!(Some(8), ll.pop());
         assert_eq!(Some(6), ll.pop());
+    }
+    #[test]
+    fn into_iter() {
+        let data = [1, 2, 3, 4];
+        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        for (expected, actual) in data.iter().map(|x| *x).zip(ll.into_iter()) {
+            assert_eq!(expected, actual);
+        }
+        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        for (expected, actual) in data.iter().map(|x| *x).rev().zip(ll.into_iter().rev()) {
+            assert_eq!(expected, actual);
+        }
+    }
+    #[test]
+    fn strings() {
+        let data = [
+            format!("one"),
+            format!("two"),
+            format!("three"),
+            format!("four"),
+        ];
+        let mut ll = IntoIter::new(data).collect::<LinkedList<_>>();
+        ll.push(format!("five"));
+        assert_eq!(ll.len(), 5);
+        let mut idx = ll.first_mut().unwrap();
+        assert_eq!("one", idx.next().unwrap());
+        assert_eq!("four", idx.nth_back(3).unwrap());
+        assert_eq!("three", *idx);
+        let (e, idx) = idx.remove();
+        assert_eq!("three", e);
+        let mut idx = idx.unwrap();
+        assert_eq!("four", *idx);
+        idx.insert_after(format!("zero"));
+        assert_eq!("zero", *idx);
+        idx.set_as_head();
+        assert_eq!(
+            vec!["zero", "five", "one", "two", "four"],
+            ll.into_iter().collect::<Vec<_>>()
+        );
     }
 }
