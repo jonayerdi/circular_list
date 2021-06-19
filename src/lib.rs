@@ -333,8 +333,8 @@ impl<'a, T> LinkedListIndex<'a, T> {
 
 impl<'a, T> Deref for LinkedListIndex<'a, T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
-        self.data()
+    fn deref(&self) -> &'a Self::Target {
+        unsafe { mem::transmute(self.data()) }
     }
 }
 
@@ -458,14 +458,14 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
 
 impl<'a, T> Deref for LinkedListIndexMut<'a, T> {
     type Target = T;
-    fn deref(&self) -> &Self::Target {
-        self.data()
+    fn deref(&self) -> &'a Self::Target {
+        unsafe { mem::transmute(self.data()) }
     }
 }
 
 impl<'a, T> DerefMut for LinkedListIndexMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.data_mut()
+    fn deref_mut(&mut self) -> &'a mut Self::Target {
+        unsafe { mem::transmute(self.data_mut()) }
     }
 }
 
