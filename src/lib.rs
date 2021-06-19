@@ -321,8 +321,12 @@ impl<'a, T> LinkedListIndex<'a, T> {
         Self { list, node }
     }
     /// Returns an immutable reference to the node's underlying data.
-    pub fn data(&self) -> &T {
-        unsafe { &self.node.as_ref().data }
+    pub fn data(&self) -> &'a T {
+        unsafe {
+            // SAFETY: This is safe because `list` and `node` must be valid,
+            // and `node` cannot be deleted while this borrow is active.
+            mem::transmute(&self.node.as_ref().data)
+        }
     }
     /// Creates a finite iterator which traverses the list starting from the current node.
     pub fn iter_list(self) -> Take<Self> {
@@ -334,7 +338,7 @@ impl<'a, T> LinkedListIndex<'a, T> {
 impl<'a, T> Deref for LinkedListIndex<'a, T> {
     type Target = T;
     fn deref(&self) -> &'a Self::Target {
-        unsafe { mem::transmute(self.data()) }
+        self.data()
     }
 }
 
@@ -349,7 +353,7 @@ impl<'a, T> Eq for LinkedListIndex<'a, T> {}
 impl<'a, T> From<LinkedListIndexMut<'a, T>> for LinkedListIndex<'a, T> {
     fn from(source: LinkedListIndexMut<'a, T>) -> Self {
         unsafe {
-            // SAFETY: This is safe because `list` and `node` come 
+            // SAFETY: This is safe because `list` and `node` come
             // from a `LinkedListIndexMut` instance and must be valid.
             Self::new(source.list, source.node)
         }
@@ -378,12 +382,20 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
         Self { list, node }
     }
     /// Returns an immutable reference to the node's underlying data.
-    pub fn data(&self) -> &T {
-        unsafe { &self.node.as_ref().data }
+    pub fn data(&self) -> &'a T {
+        unsafe {
+            // SAFETY: This is safe because `list` and `node` must be valid,
+            // and `node` cannot be deleted while this borrow is active.
+            mem::transmute(&self.node.as_ref().data)
+        }
     }
     /// Returns a mutable reference to the node's underlying data.
-    pub fn data_mut(&mut self) -> &mut T {
-        unsafe { &mut self.node.as_mut().data }
+    pub fn data_mut(&mut self) -> &'a mut T {
+        unsafe {
+            // SAFETY: This is safe because `list` and `node` must be valid,
+            // and `node` cannot be deleted while this borrow is active.
+            mem::transmute(&mut self.node.as_mut().data)
+        }
     }
     /// Sets the current node as the head of the `LinkedList` it references.
     pub fn set_as_head(&mut self) {
@@ -459,13 +471,13 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
 impl<'a, T> Deref for LinkedListIndexMut<'a, T> {
     type Target = T;
     fn deref(&self) -> &'a Self::Target {
-        unsafe { mem::transmute(self.data()) }
+        self.data()
     }
 }
 
 impl<'a, T> DerefMut for LinkedListIndexMut<'a, T> {
     fn deref_mut(&mut self) -> &'a mut Self::Target {
-        unsafe { mem::transmute(self.data_mut()) }
+        self.data_mut()
     }
 }
 
@@ -482,7 +494,9 @@ impl<'a, T> Iterator for LinkedListIndex<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
-            let item = mem::transmute(&self.node.as_ref().data);
+            // SAFETY: This is safe because`node.next`
+            // must be pointing to another valid node.
+            let item = self.data();
             self.node = self.node.as_ref().next;
             Some(item)
         }
@@ -492,7 +506,9 @@ impl<'a, T> Iterator for LinkedListIndex<'a, T> {
 impl<'a, T> DoubleEndedIterator for LinkedListIndex<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
-            let item = mem::transmute(&self.node.as_ref().data);
+            // SAFETY: This is safe because`node.prev`
+            // must be pointing to another valid node.
+            let item = self.data();
             self.node = self.node.as_ref().prev;
             Some(item)
         }
@@ -504,7 +520,9 @@ impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
-            let item = mem::transmute(&mut self.node.as_mut().data);
+            // SAFETY: This is safe because`node.next`
+            // must be pointing to another valid node.
+            let item = self.data_mut();
             self.node = self.node.as_ref().next;
             Some(item)
         }
@@ -514,7 +532,9 @@ impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
 impl<'a, T> DoubleEndedIterator for LinkedListIndexMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
-            let item = mem::transmute(&mut self.node.as_mut().data);
+            // SAFETY: This is safe because`node.prev`
+            // must be pointing to another valid node.
+            let item = self.data_mut();
             self.node = self.node.as_ref().prev;
             Some(item)
         }
