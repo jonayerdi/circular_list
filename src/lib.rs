@@ -444,6 +444,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     /// Returns the data from the removed node and a reference to the next node, or `None` if the last node from the list was removed.
     pub fn remove(mut self) -> (T, Option<Self>) {
         unsafe {
+            // SAFETY: `self` is consumed, and a new valid index is returned only if the list is non-empty.
             self.list.length -= 1;
             let (data, next) = Node::delete(self.node);
             (
@@ -460,6 +461,53 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
                 },
             )
         }
+    }
+    /// Removes the current node.
+    ///
+    /// Returns the data from the removed node, and makes `self` point to to the next node.
+    ///
+    /// Panics if the list is empty after removing the current node.
+    pub fn remove_advance(&mut self) -> T {
+        unsafe {
+            // SAFETY: `self` is consumed, and the index is advanced only if the list is non-empty.
+            self.list.length -= 1;
+            let (data, next) = Node::delete(self.node);
+            match next {
+                Some(next) => {
+                    if self.node == self.list.head {
+                        self.list.head = next;
+                    }
+                    self.node = next;
+                }
+                None => panic!("List is empty, invalid index"),
+            };
+            data
+        }
+    }
+    /// Removes the current node.
+    ///
+    /// Returns the data from the removed node, and makes `self` point to to the next node if possible.
+    /// The second element from the returned tuple indicates whether `self` is still valid.
+    /// 
+    /// # Safety
+    ///
+    /// If the second element of the returned tuple is `false`, indicating that the list is now empty,
+    /// `self` will be in an invalid state and must be dropped without calling any of its methods.
+    pub unsafe fn remove_dangle(&mut self) -> (T, bool) {
+        self.list.length -= 1;
+        let (data, next) = Node::delete(self.node);
+        (data, match next {
+            Some(next) => {
+                if self.node == self.list.head {
+                    self.list.head = next;
+                }
+                self.node = next;
+                true
+            }
+            None => {
+                false
+            },
+        })
     }
     /// Creates a finite iterator which traverses the list starting from the current node.
     pub fn iter_list(self) -> Take<Self> {
@@ -638,6 +686,44 @@ mod tests {
         assert_eq!(1, value);
         assert_eq!(2, *idx.unwrap());
         assert_eq!(vec![2, 4], ll.into_iter().collect::<Vec<_>>());
+    }
+    #[test]
+    fn remove_advance() {
+        let data = [1, 2, 3, 4];
+        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut idx = ll.last_mut().unwrap();
+        idx.next_back().unwrap();
+        assert_eq!(3, idx.remove_advance());
+        assert_eq!(4, *idx);
+        let mut idx = ll.first_mut().unwrap();
+        assert_eq!(1, idx.remove_advance());
+        assert_eq!(2, *idx);
+        assert_eq!(vec![2, 4], ll.into_iter().collect::<Vec<_>>());
+    }
+    #[test]
+    fn remove_dangle() {
+        unsafe {
+            let data = [1, 2, 3, 4];
+            let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+            let mut idx = ll.last_mut().unwrap();
+            idx.next_back().unwrap();
+            let (value, not_empty) = idx.remove_dangle();
+            assert!(not_empty);
+            assert_eq!(3, value);
+            assert_eq!(4, *idx);
+            idx = ll.first_mut().unwrap();
+            let (value, not_empty) = idx.remove_dangle();
+            assert!(not_empty);
+            assert_eq!(1, value);
+            assert_eq!(2, *idx);
+            let (value, not_empty) = idx.remove_dangle();
+            assert!(not_empty);
+            assert_eq!(2, value);
+            let (value, not_empty) = idx.remove_dangle();
+            assert!(!not_empty);
+            assert_eq!(4, value);
+            assert_eq!(Vec::<i32>::new(), ll.into_iter().collect::<Vec<_>>());
+        }
     }
     #[test]
     fn pop() {
