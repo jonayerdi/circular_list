@@ -488,7 +488,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     ///
     /// Returns the data from the removed node, and makes `self` point to to the next node if possible.
     /// The second element from the returned tuple indicates whether `self` is still valid.
-    /// 
+    ///
     /// # Safety
     ///
     /// If the second element of the returned tuple is `false`, indicating that the list is now empty,
@@ -496,18 +496,19 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     pub unsafe fn remove_dangle(&mut self) -> (T, bool) {
         self.list.length -= 1;
         let (data, next) = Node::delete(self.node);
-        (data, match next {
-            Some(next) => {
-                if self.node == self.list.head {
-                    self.list.head = next;
+        (
+            data,
+            match next {
+                Some(next) => {
+                    if self.node == self.list.head {
+                        self.list.head = next;
+                    }
+                    self.node = next;
+                    true
                 }
-                self.node = next;
-                true
-            }
-            None => {
-                false
+                None => false,
             },
-        })
+        )
     }
     /// Creates a finite iterator which traverses the list starting from the current node.
     pub fn iter_list(self) -> Take<Self> {
