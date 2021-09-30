@@ -1,7 +1,6 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
     iter::{FromIterator, Take},
-    marker::PhantomPinned,
     mem,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
@@ -17,7 +16,6 @@ struct Node<T> {
     next: NonNull<Node<T>>,
     prev: NonNull<Node<T>>,
     data: T,
-    pin_: PhantomPinned,
 }
 
 impl<T> Node<T> {
@@ -29,15 +27,7 @@ impl<T> Node<T> {
     unsafe fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
         // SAFETY: We check for null pointer returned by alloc with NonNull::new().unwrap()
         let node = NonNull::new(alloc(Layout::new::<Node<T>>()) as *mut Node<T>).unwrap();
-        ptr::write(
-            node.as_ptr(),
-            Node {
-                data,
-                prev,
-                next,
-                pin_: PhantomPinned,
-            },
-        );
+        ptr::write(node.as_ptr(), Node { data, prev, next });
         node
     }
     /// Creates a new `Node` containing `data` and returns a pointer to it.
