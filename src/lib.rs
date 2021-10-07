@@ -1,6 +1,7 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
     iter::{FromIterator, Take},
+    marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
@@ -149,6 +150,7 @@ impl<T> Node<T> {
 pub struct LinkedList<T> {
     head: NonNull<Node<T>>,
     length: usize,
+    _marker: PhantomData<T>, // I think this is needed for the drop check
 }
 
 impl<T> LinkedList<T> {
@@ -157,6 +159,7 @@ impl<T> LinkedList<T> {
         LinkedList {
             head: NonNull::dangling(),
             length: 0,
+            _marker: PhantomData,
         }
     }
     /// Returns the number of elements in the list.
@@ -255,7 +258,11 @@ impl<T> FromIterator<T> for LinkedList<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let iter = iter.into_iter();
         if let Some((head, length)) = Node::create_chain_circular(iter) {
-            LinkedList { head, length }
+            LinkedList {
+                head,
+                length,
+                _marker: PhantomData,
+            }
         } else {
             LinkedList::new()
         }
