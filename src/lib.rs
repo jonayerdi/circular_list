@@ -1,5 +1,5 @@
 use std::{
-    alloc::{alloc, dealloc, Layout},
+    alloc::{alloc, dealloc, handle_alloc_error, Layout},
     iter::{FromIterator, Take},
     marker::PhantomData,
     mem,
@@ -22,21 +22,27 @@ struct Node<T> {
 impl<T> Node<T> {
     /// Creates a new `Node` containing `data` and returns a pointer to it.
     ///
-    /// # Safety
-    ///
     /// The `prev` and `next` pointers may or may not be dangling.
-    unsafe fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
-        // SAFETY: We check for null pointer returned by alloc with NonNull::new().unwrap()
-        let node = NonNull::new(alloc(Layout::new::<Node<T>>()) as *mut Node<T>).unwrap();
-        ptr::write(node.as_ptr(), Node { data, prev, next });
-        node
+    ///
+    /// Calls `handle_alloc_error` if the allocation of the new `Node` fails.
+    fn new(data: T, prev: NonNull<Node<T>>, next: NonNull<Node<T>>) -> NonNull<Node<T>> {
+        unsafe {
+            // SAFETY: We check for null pointer returned by `alloc` with `NonNull::new().unwrap_or_else()`.
+            // `alloc` is UB if `layout` has a size of zero, but this will never be the case for `Node<T>`.
+            let node = NonNull::new(alloc(Layout::new::<Node<T>>()) as *mut Node<T>)
+                .unwrap_or_else(|| handle_alloc_error(Layout::new::<Node<T>>()));
+            ptr::write(node.as_ptr(), Node { data, prev, next });
+            node
+        }
     }
     /// Creates a new `Node` containing `data` and returns a pointer to it.
     ///
-    /// The new `Node` has its `next` and `prev` members pointing to itself.
+    /// The new `Node` will have its `next` and `prev` members pointing to itself.
+    ///
+    /// Calls `handle_alloc_error` if the allocation of the new `Node` fails.
     fn new_circular(data: T) -> NonNull<Node<T>> {
         unsafe {
-            // SAFETY: This is safe because `prev` and `next` are pointing to a valid `Node`.
+            // SAFETY: `Node::new` is safe, and if it returns, `node` will be valid to point at.
             let mut node = Node::new(data, NonNull::dangling(), NonNull::dangling());
             node.as_mut().next = node;
             node.as_mut().prev = node;
@@ -48,22 +54,23 @@ impl<T> Node<T> {
     /// Returns a tuple with the pointers to the first and last `Node`s, as well as the count of `Node`s in the chain.
     /// Iff `iter` is empty, this function returns `None`.
     ///
-    /// # Safety
-    ///
     /// The `first.prev` and `last.next` pointers are left dangling.
-    unsafe fn create_chain_dangling(
+    fn create_chain_dangling(
         mut iter: impl Iterator<Item = T>,
     ) -> Option<(NonNull<Node<T>>, NonNull<Node<T>>, usize)> {
-        let first = Node::new(iter.next()?, NonNull::dangling(), NonNull::dangling());
-        let mut current = first;
-        let mut count = 1;
-        for item in iter {
-            let new_node = Node::new(item, current, NonNull::dangling());
-            current.as_mut().next = new_node;
-            current = new_node;
-            count += 1;
+        unsafe {
+            // SAFETY: This should be safe, we make no assumptions about iter.
+            let first = Node::new(iter.next()?, NonNull::dangling(), NonNull::dangling());
+            let mut current = first;
+            let mut count = 1;
+            for item in iter {
+                let new_node = Node::new(item, current, NonNull::dangling());
+                current.as_mut().next = new_node;
+                current = new_node;
+                count += 1;
+            }
+            Some((first, current, count))
         }
-        Some((first, current, count))
     }
     /// Creates a circular chain of `Node`s with the elements from `iter`.
     ///
@@ -71,7 +78,7 @@ impl<T> Node<T> {
     /// Iff `iter` is empty, this function returns `None`.
     fn create_chain_circular(iter: impl Iterator<Item = T>) -> Option<(NonNull<Node<T>>, usize)> {
         unsafe {
-            // SAFETY: This is safe because we fix the dangling pointers from the first and last nodes.
+            // SAFETY: This should be safe, we make no assumptions about iter.
             let (mut first, mut last, count) = Node::create_chain_dangling(iter)?;
             first.as_mut().prev = last;
             last.as_mut().next = first;
@@ -82,7 +89,7 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current` and `current.next` should not be dangling.
+    /// `current` and `current.next` must not be dangling.
     unsafe fn insert_after(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
         let mut next = current.as_ref().next;
         let node = Node::new(data, current, next);
@@ -95,7 +102,7 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current` and `current.prev` should not be dangling.
+    /// `current` and `current.prev` must not be dangling.
     unsafe fn insert_before(mut current: NonNull<Node<T>>, data: T) -> NonNull<Node<T>> {
         let mut prev = current.as_ref().prev;
         let node = Node::new(data, prev, current);
@@ -110,7 +117,7 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current` should not be dangling.
+    /// `current` must not be dangling.
     /// References to `current` will no longer be valid.
     unsafe fn delete_raw(current: NonNull<Node<T>>) -> T {
         let data = ptr::read(current.as_ptr()).data;
@@ -125,8 +132,8 @@ impl<T> Node<T> {
     ///
     /// # Safety
     ///
-    /// `current`, `current.prev` and `current.next` should not be dangling.
-    /// Other references to `current` will no longer be valid.
+    /// `current`, `current.prev` and `current.next` must not be dangling.
+    /// References to `current` will no longer be valid.
     unsafe fn delete(current: NonNull<Node<T>>) -> (T, Option<NonNull<Node<T>>>) {
         let mut prev = current.as_ref().prev;
         let mut next = current.as_ref().next;
@@ -143,20 +150,20 @@ impl<T> Node<T> {
     }
 }
 
-/// A circular linked list.
+/// A circular doubly linked list.
 ///
 /// Every node in the list contains references to the previous and next nodes.
 #[derive(Debug)]
 pub struct LinkedList<T> {
     head: NonNull<Node<T>>,
     length: usize,
-    _marker: PhantomData<T>, // I think this is needed for the drop check
+    _marker: PhantomData<T>, // I think this is needed for the drop check, since we actually own the underlying `T`'s in the list
 }
 
 impl<T> LinkedList<T> {
     /// Creates a new empty `LinkedList`.
     pub fn new() -> Self {
-        LinkedList {
+        Self {
             head: NonNull::dangling(),
             length: 0,
             _marker: PhantomData,
@@ -243,7 +250,8 @@ impl<T> Drop for LinkedList<T> {
         // Free all the `Node`s
         unsafe {
             // SAFETY: This deletes each node exactly once, assuming that the circular
-            // linked list is constructed correctly, and that its length is self.length.
+            // linked list is constructed correctly, and that its length is self.length,
+            // which should always be the case.
             let mut current = self.head;
             for _ in 0..self.len() {
                 let next = current.as_ref().next;
@@ -258,13 +266,13 @@ impl<T> FromIterator<T> for LinkedList<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let iter = iter.into_iter();
         if let Some((head, length)) = Node::create_chain_circular(iter) {
-            LinkedList {
+            Self {
                 head,
                 length,
                 _marker: PhantomData,
             }
         } else {
-            LinkedList::new()
+            Self::new()
         }
     }
 }
@@ -326,7 +334,7 @@ impl<'a, T> LinkedListIndex<'a, T> {
         }
     }
     /// Creates a finite iterator which traverses the list starting from the current node.
-    pub fn iter_list(self) -> Take<Self> {
+    pub fn iter_list(self) -> impl Iterator<Item = &'a T> {
         let len = self.list.len();
         self.take(len)
     }
