@@ -7,7 +7,7 @@ use std::{
     ptr::{self, NonNull},
 };
 
-/// A node of a `LinkedList`.
+/// A node of a `CircularList`.
 ///
 /// Contains the data and the pointers to the next and previous nodes.
 ///
@@ -154,14 +154,14 @@ impl<T> Node<T> {
 ///
 /// Every node in the list contains references to the previous and next nodes.
 #[derive(Debug)]
-pub struct LinkedList<T> {
+pub struct CircularList<T> {
     head: NonNull<Node<T>>,
     length: usize,
     _marker: PhantomData<T>, // I think this is needed for the drop check, since we actually own the underlying `T`'s in the list
 }
 
-impl<T> LinkedList<T> {
-    /// Creates a new empty `LinkedList`.
+impl<T> CircularList<T> {
+    /// Creates a new empty `CircularList`.
     pub fn new() -> Self {
         Self {
             head: NonNull::dangling(),
@@ -177,45 +177,45 @@ impl<T> LinkedList<T> {
     pub const fn is_empty(&self) -> bool {
         self.length == 0
     }
-    /// Returns a `LinkedListIndex` to the first node of the list (`head`), or `None` if the list is empty.
-    pub fn first<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
+    /// Returns a `CircularListCursor` to the first node of the list (`head`), or `None` if the list is empty.
+    pub fn first<'a>(&'a self) -> Option<CircularListCursor<'a, T>> {
         unsafe {
-            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            // SAFETY: self.head can only be dangling if the CircularList is empty
             if !self.is_empty() {
-                Some(LinkedListIndex::new(self, self.head))
+                Some(CircularListCursor::new(self, self.head))
             } else {
                 None
             }
         }
     }
-    /// Returns a `LinkedListIndexMut` to the first node of the list (`head`), or `None` if the list is empty.
-    pub fn first_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
+    /// Returns a `CircularListCursorMut` to the first node of the list (`head`), or `None` if the list is empty.
+    pub fn first_mut<'a>(&'a mut self) -> Option<CircularListCursorMut<'a, T>> {
         unsafe {
-            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            // SAFETY: self.head can only be dangling if the CircularList is empty
             if !self.is_empty() {
-                Some(LinkedListIndexMut::new(self, self.head))
+                Some(CircularListCursorMut::new(self, self.head))
             } else {
                 None
             }
         }
     }
-    /// Returns a `LinkedListIndex` to the last node of the list (`head.prev`), or `None` if the list is empty.
-    pub fn last<'a>(&'a self) -> Option<LinkedListIndex<'a, T>> {
+    /// Returns a `CircularListCursor` to the last node of the list (`head.prev`), or `None` if the list is empty.
+    pub fn last<'a>(&'a self) -> Option<CircularListCursor<'a, T>> {
         unsafe {
-            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            // SAFETY: self.head can only be dangling if the CircularList is empty
             if !self.is_empty() {
-                Some(LinkedListIndex::new(self, self.head.as_ref().prev))
+                Some(CircularListCursor::new(self, self.head.as_ref().prev))
             } else {
                 None
             }
         }
     }
-    /// Returns a `LinkedListIndexMut` to the last node of the list (`head.prev`), or `None` if the list is empty.
-    pub fn last_mut<'a>(&'a mut self) -> Option<LinkedListIndexMut<'a, T>> {
+    /// Returns a `CircularListCursorMut` to the last node of the list (`head.prev`), or `None` if the list is empty.
+    pub fn last_mut<'a>(&'a mut self) -> Option<CircularListCursorMut<'a, T>> {
         unsafe {
-            // SAFETY: self.head can only be dangling if the LinkedList is empty
+            // SAFETY: self.head can only be dangling if the CircularList is empty
             if !self.is_empty() {
-                Some(LinkedListIndexMut::new(self, self.head.as_ref().prev))
+                Some(CircularListCursorMut::new(self, self.head.as_ref().prev))
             } else {
                 None
             }
@@ -223,8 +223,8 @@ impl<T> LinkedList<T> {
     }
     /// Appends a new node with `data` to the end of the list.
     pub fn push(&mut self, data: T) {
-        if let Some(mut index) = self.last_mut() {
-            index.insert_after(data);
+        if let Some(mut cursor) = self.last_mut() {
+            cursor.insert_after(data);
         } else {
             self.head = Node::new_circular(data);
             self.length = 1;
@@ -232,8 +232,8 @@ impl<T> LinkedList<T> {
     }
     /// Appends all the elements from `iter` to the end of the list.
     pub fn extend(&mut self, iter: impl Iterator<Item = T>) {
-        if let Some(mut index) = self.last_mut() {
-            index.extend_after(iter);
+        if let Some(mut cursor) = self.last_mut() {
+            cursor.extend_after(iter);
         } else if let Some((head, length)) = Node::create_chain_circular(iter) {
             self.head = head;
             self.length = length;
@@ -245,7 +245,7 @@ impl<T> LinkedList<T> {
     }
 }
 
-impl<T> Drop for LinkedList<T> {
+impl<T> Drop for CircularList<T> {
     fn drop(&mut self) {
         // Free all the `Node`s
         unsafe {
@@ -262,7 +262,7 @@ impl<T> Drop for LinkedList<T> {
     }
 }
 
-impl<T> FromIterator<T> for LinkedList<T> {
+impl<T> FromIterator<T> for CircularList<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let iter = iter.into_iter();
         if let Some((head, length)) = Node::create_chain_circular(iter) {
@@ -277,10 +277,10 @@ impl<T> FromIterator<T> for LinkedList<T> {
     }
 }
 
-/// A `DoubleEndedIterator` which consumes the elements from a `LinkedList`.
-pub struct LinkedListIterator<T>(LinkedList<T>);
+/// A `DoubleEndedIterator` which consumes the elements from a `CircularList`.
+pub struct CircularListIterator<T>(CircularList<T>);
 
-impl<T> Iterator for LinkedListIterator<T> {
+impl<T> Iterator for CircularListIterator<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -288,41 +288,41 @@ impl<T> Iterator for LinkedListIterator<T> {
     }
 }
 
-impl<T> DoubleEndedIterator for LinkedListIterator<T> {
+impl<T> DoubleEndedIterator for CircularListIterator<T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         Some(self.0.last_mut()?.remove().0)
     }
 }
 
-impl<T> IntoIterator for LinkedList<T> {
+impl<T> IntoIterator for CircularList<T> {
     type Item = T;
 
-    type IntoIter = LinkedListIterator<T>;
+    type IntoIter = CircularListIterator<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        LinkedListIterator(self)
+        CircularListIterator(self)
     }
 }
 
-/// Reference to a node from a `LinkedList`.
+/// Reference to a node from a `CircularList`.
 ///
 /// Can be dereferenced to get the node's underlying data.
 ///
 /// This is also a circular iterator which traverses the list indefinitely.
 /// The `iter_list` method can be used to get a finite iterator which traverses the list once.
 #[derive(Clone, Debug)]
-pub struct LinkedListIndex<'a, T> {
-    list: &'a LinkedList<T>,
+pub struct CircularListCursor<'a, T> {
+    list: &'a CircularList<T>,
     node: NonNull<Node<T>>,
 }
 
-impl<'a, T> LinkedListIndex<'a, T> {
-    /// Creates a new `LinkedListIndex`.
+impl<'a, T> CircularListCursor<'a, T> {
+    /// Creates a new `CircularListCursor`.
     ///
     /// # Safety
     ///
     /// `node` must be a node from `list`.
-    unsafe fn new(list: &'a LinkedList<T>, node: NonNull<Node<T>>) -> Self {
+    unsafe fn new(list: &'a CircularList<T>, node: NonNull<Node<T>>) -> Self {
         Self { list, node }
     }
     /// Returns an immutable reference to the node's underlying data.
@@ -340,50 +340,50 @@ impl<'a, T> LinkedListIndex<'a, T> {
     }
 }
 
-impl<'a, T> Deref for LinkedListIndex<'a, T> {
+impl<'a, T> Deref for CircularListCursor<'a, T> {
     type Target = T;
     fn deref(&self) -> &'a Self::Target {
         self.data()
     }
 }
 
-impl<'a, T> PartialEq for LinkedListIndex<'a, T> {
+impl<'a, T> PartialEq for CircularListCursor<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self.node.as_ptr(), other.node.as_ptr())
     }
 }
 
-impl<'a, T> Eq for LinkedListIndex<'a, T> {}
+impl<'a, T> Eq for CircularListCursor<'a, T> {}
 
-impl<'a, T> From<LinkedListIndexMut<'a, T>> for LinkedListIndex<'a, T> {
-    fn from(source: LinkedListIndexMut<'a, T>) -> Self {
+impl<'a, T> From<CircularListCursorMut<'a, T>> for CircularListCursor<'a, T> {
+    fn from(source: CircularListCursorMut<'a, T>) -> Self {
         unsafe {
             // SAFETY: This is safe because `list` and `node` come
-            // from a `LinkedListIndexMut` instance and must be valid.
+            // from a `CircularListCursorMut` instance and must be valid.
             Self::new(source.list, source.node)
         }
     }
 }
 
-/// Mutable reference to a node from a `LinkedList`.
+/// Mutable reference to a node from a `CircularList`.
 ///
 /// Can be dereferenced to get or set the node's underlying data.
 ///
 /// This is also a circular iterator which traverses the list indefinitely.
 /// The `iter_list` method can be used to get a finite iterator which traverses the list once.
 #[derive(Debug)]
-pub struct LinkedListIndexMut<'a, T> {
-    list: &'a mut LinkedList<T>,
+pub struct CircularListCursorMut<'a, T> {
+    list: &'a mut CircularList<T>,
     node: NonNull<Node<T>>,
 }
 
-impl<'a, T> LinkedListIndexMut<'a, T> {
-    /// Creates a new `LinkedListIndexMut`.
+impl<'a, T> CircularListCursorMut<'a, T> {
+    /// Creates a new `CircularListCursorMut`.
     ///
     /// # Safety
     ///
     /// `node` must be a node from `list`.
-    unsafe fn new(list: &'a mut LinkedList<T>, node: NonNull<Node<T>>) -> Self {
+    unsafe fn new(list: &'a mut CircularList<T>, node: NonNull<Node<T>>) -> Self {
         Self { list, node }
     }
     /// Returns an immutable reference to the node's underlying data.
@@ -402,7 +402,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
             mem::transmute(&mut self.node.as_mut().data)
         }
     }
-    /// Sets the current node as the head of the `LinkedList` it references.
+    /// Sets the current node as the head of the `CircularList` it references.
     pub fn set_as_head(&mut self) {
         self.list.head = self.node;
     }
@@ -449,7 +449,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     /// Returns the data from the removed node and a reference to the next node, or `None` if the last node from the list was removed.
     pub fn remove(mut self) -> (T, Option<Self>) {
         unsafe {
-            // SAFETY: `self` is consumed, and a new valid index is returned only if the list is non-empty.
+            // SAFETY: `self` is consumed, and a new valid cursor is returned only if the list is non-empty.
             self.list.length -= 1;
             let (data, next) = Node::delete(self.node);
             (
@@ -474,7 +474,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     /// Panics if the list is empty after removing the current node.
     pub fn remove_advance(&mut self) -> T {
         unsafe {
-            // SAFETY: `self` is consumed, and the index is advanced only if the list is non-empty.
+            // SAFETY: `self` is consumed, and the cursor is advanced only if the list is non-empty.
             self.list.length -= 1;
             let (data, next) = Node::delete(self.node);
             match next {
@@ -484,7 +484,7 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
                     }
                     self.node = next;
                 }
-                None => panic!("List is empty, invalid index"),
+                None => panic!("List is empty, invalid cursor"),
             };
             data
         }
@@ -522,28 +522,28 @@ impl<'a, T> LinkedListIndexMut<'a, T> {
     }
 }
 
-impl<'a, T> Deref for LinkedListIndexMut<'a, T> {
+impl<'a, T> Deref for CircularListCursorMut<'a, T> {
     type Target = T;
     fn deref(&self) -> &'a Self::Target {
         self.data()
     }
 }
 
-impl<'a, T> DerefMut for LinkedListIndexMut<'a, T> {
+impl<'a, T> DerefMut for CircularListCursorMut<'a, T> {
     fn deref_mut(&mut self) -> &'a mut Self::Target {
         self.data_mut()
     }
 }
 
-impl<'a, T> PartialEq for LinkedListIndexMut<'a, T> {
+impl<'a, T> PartialEq for CircularListCursorMut<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self.node.as_ptr(), other.node.as_ptr())
     }
 }
 
-impl<'a, T> Eq for LinkedListIndexMut<'a, T> {}
+impl<'a, T> Eq for CircularListCursorMut<'a, T> {}
 
-impl<'a, T> Iterator for LinkedListIndex<'a, T> {
+impl<'a, T> Iterator for CircularListCursor<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -557,7 +557,7 @@ impl<'a, T> Iterator for LinkedListIndex<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator for LinkedListIndex<'a, T> {
+impl<'a, T> DoubleEndedIterator for CircularListCursor<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
             // SAFETY: This is safe because`node.prev`
@@ -569,7 +569,7 @@ impl<'a, T> DoubleEndedIterator for LinkedListIndex<'a, T> {
     }
 }
 
-impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
+impl<'a, T> Iterator for CircularListCursorMut<'a, T> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -583,7 +583,7 @@ impl<'a, T> Iterator for LinkedListIndexMut<'a, T> {
     }
 }
 
-impl<'a, T> DoubleEndedIterator for LinkedListIndexMut<'a, T> {
+impl<'a, T> DoubleEndedIterator for CircularListCursorMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         unsafe {
             // SAFETY: This is safe because`node.prev`
@@ -601,7 +601,7 @@ mod tests {
     use std::array::IntoIter;
     #[test]
     fn empty() {
-        let ll: LinkedList<()> = LinkedList::new();
+        let ll: CircularList<()> = CircularList::new();
         assert!(ll.is_empty());
         assert!(ll.first().is_none());
         assert!(ll.last().is_none());
@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn push() {
         let data = [1, 2, 3, 4];
-        let mut ll = LinkedList::new();
+        let mut ll = CircularList::new();
         for x in data.iter() {
             ll.push(*x);
         }
@@ -620,9 +620,9 @@ mod tests {
         }
     }
     #[test]
-    fn index() {
+    fn cursor() {
         let data = [1, 2, 3, 4, 5, 6];
-        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         assert_eq!(ll.len(), 6);
         let mut idx = ll.last().unwrap();
         assert_eq!(6, *idx);
@@ -636,9 +636,9 @@ mod tests {
         assert_eq!(4, *idx);
     }
     #[test]
-    fn index_mut() {
+    fn cursor_mut() {
         let data = [1, 2, 3, 4];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         let mut idx = ll.first_mut().unwrap();
         idx.next().unwrap();
         idx.insert_after(5);
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn extend_after() {
         let data = [1, 2, 5, 6];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         let mut idx = ll.first_mut().unwrap();
         idx.next().unwrap();
         idx.extend_after([3, 4].iter().map(|x| *x));
@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn extend_empty() {
         let data = [1, 2, 3, 4];
-        let mut ll = LinkedList::new();
+        let mut ll = CircularList::new();
         ll.extend(data.iter().map(|x| *x));
         let expected: Vec<_> = [1, 2, 3, 4].iter().collect();
         let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn extend() {
         let data = [1, 2, 3, 4];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         ll.extend([5, 6].iter().map(|x| *x));
         let expected: Vec<_> = [1, 2, 3, 4, 5, 6].iter().collect();
         let actual: Vec<_> = ll.first().unwrap().iter_list().collect();
@@ -682,7 +682,7 @@ mod tests {
     #[test]
     fn remove() {
         let data = [1, 2, 3, 4];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         let mut idx = ll.last_mut().unwrap();
         idx.next_back().unwrap();
         let (value, idx) = idx.remove();
@@ -696,7 +696,7 @@ mod tests {
     #[test]
     fn remove_advance() {
         let data = [1, 2, 3, 4];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         let mut idx = ll.last_mut().unwrap();
         idx.next_back().unwrap();
         assert_eq!(3, idx.remove_advance());
@@ -710,7 +710,7 @@ mod tests {
     fn remove_dangle() {
         unsafe {
             let data = [1, 2, 3, 4];
-            let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+            let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
             let mut idx = ll.last_mut().unwrap();
             idx.next_back().unwrap();
             let (value, not_empty) = idx.remove_dangle();
@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn pop() {
         let data = [1, 2, 4];
-        let mut ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let mut ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         let mut idx = ll.first_mut().unwrap();
         idx.nth(1);
         idx.insert_before(3);
@@ -753,11 +753,11 @@ mod tests {
     #[test]
     fn into_iter() {
         let data = [1, 2, 3, 4];
-        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         for (expected, actual) in data.iter().map(|x| *x).zip(ll.into_iter()) {
             assert_eq!(expected, actual);
         }
-        let ll = data.iter().map(|x| *x).collect::<LinkedList<_>>();
+        let ll = data.iter().map(|x| *x).collect::<CircularList<_>>();
         for (expected, actual) in data.iter().map(|x| *x).rev().zip(ll.into_iter().rev()) {
             assert_eq!(expected, actual);
         }
@@ -770,7 +770,7 @@ mod tests {
             format!("three"),
             format!("four"),
         ];
-        let mut ll = IntoIter::new(data).collect::<LinkedList<_>>();
+        let mut ll = IntoIter::new(data).collect::<CircularList<_>>();
         ll.push(format!("five"));
         assert_eq!(ll.len(), 5);
         let mut idx = ll.first_mut().unwrap();
